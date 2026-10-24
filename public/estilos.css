@@ -228,6 +228,7 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .ficha dt { color: var(--texto-suave); }
 .ficha dd { margin: 0; word-break: break-word; }
 .ficha dd code { font-size: 12px; color: var(--texto-suave); }
+.ficha .boton-ocr { margin-left: 6px; padding: 3px 10px; font-size: 12.5px; vertical-align: baseline; }
 
 .herramientas { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .selector-pagina {

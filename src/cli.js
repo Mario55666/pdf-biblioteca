@@ -3,6 +3,7 @@
 //   node src/cli.js listar [búsqueda]
 //   node src/cli.js xml <id> --compacto --sangria 2
 //   node src/cli.js paginas <id>
+//   node src/cli.js ocr <id> --idiomas spa+eng
 //   node src/cli.js json2xml datos.json datos.xml --raiz datos --atributo /datos/id
 //   node src/cli.js eliminar <id>
 
@@ -16,8 +17,11 @@ import { presetCompactoPdf2json } from "./presets.js";
 const AYUDA = `Biblioteca PDF → JSON → XML
 
 Comandos:
-  agregar <pdf|carpeta>...   Extrae el JSON de cada PDF y lo guarda en la biblioteca
-  listar [búsqueda]          Muestra los documentos (busca en nombre, título y texto)
+  agregar <pdf|carpeta>...   Extrae el JSON de cada PDF, lo guarda en la biblioteca y lee con OCR
+                             las páginas sin texto (--sin-ocr para omitirlo)
+  listar [búsqueda]          Muestra los documentos (busca en nombre, título, texto y OCR)
+  ocr [id]...                Lee con OCR las páginas sin texto (si no indicas id, los documentos
+                             que aún no lo tienen); --idiomas spa+eng por defecto
   xml <id>                   Vuelve a generar el XML de un documento (completo y por página) con otras opciones
   paginas <id>...            Vuelve a separar el JSON y el XML por página (todos los documentos si no indicas id)
   json2xml <entrada.json> [salida.xml]
@@ -41,6 +45,8 @@ const { values: opciones, positionals } = parseArgs({
 		atributo: { type: "string", multiple: true },
 		contenido: { type: "string", multiple: true },
 		compacto: { type: "boolean" },
+		"sin-ocr": { type: "boolean" },
+		idiomas: { type: "string" },
 		ayuda: { type: "boolean", short: "h" },
 	},
 });
@@ -75,6 +81,16 @@ function kb(bytes) {
 	return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+async function aplicarOcr(id) {
+	const ficha = await biblioteca.aplicarOcr(id, {
+		idiomas: opciones.idiomas,
+		alProgresar: (hechas, total) => process.stdout.write(`\r   OCR: página ${hechas} de ${total}`),
+	});
+	const { ocr } = ficha;
+	if (ocr.estado === "no-necesario") return console.log("   OCR: no hace falta, todas las páginas tienen texto");
+	console.log(`\r   OCR: ${ocr.conTexto.length} de ${ocr.paginas.length} páginas sin texto tenían texto en la imagen (confianza media ${ocr.confianza} %)`);
+}
+
 async function main() {
 	if (opciones.ayuda || !comando) return console.log(AYUDA);
 
@@ -87,6 +103,7 @@ async function main() {
 				try {
 					const { ficha, duplicado } = await biblioteca.agregar(await readFile(archivo), path.basename(archivo), xml);
 					console.log(`${duplicado ? "= ya estaba" : "+ agregado "}  ${ficha.id}  (${ficha.paginas} págs., JSON ${kb(ficha.bytes.json)}, XML ${kb(ficha.bytes.xml)})`);
+					if (!duplicado && !opciones["sin-ocr"]) await aplicarOcr(ficha.id);
 				} catch (error) {
 					fallos++;
 					console.error(`x ${archivo}: ${error.message}`);
@@ -101,6 +118,17 @@ async function main() {
 			if (!fichas.length) return console.log("No hay documentos.");
 			for (const f of fichas) {
 				console.log(`${f.id}\n   ${f.titulo || f.nombre} · ${f.paginas} págs. · ${new Date(f.agregado).toLocaleDateString("es-PE")}${f.fragmento ? `\n   «${f.fragmento}»` : ""}`);
+			}
+			break;
+		}
+		case "ocr": {
+			const ids = argumentos.length
+				? argumentos
+				: (await biblioteca.listar()).filter((f) => !["listo", "no-necesario"].includes(f.ocr?.estado)).map((f) => f.id);
+			if (!ids.length) return console.log("Todos los documentos ya tienen OCR.");
+			for (const id of ids) {
+				console.log(id);
+				await aplicarOcr(id);
 			}
 			break;
 		}

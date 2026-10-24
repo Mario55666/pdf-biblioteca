@@ -123,7 +123,9 @@ async function subir(archivos) {
 				body: archivo,
 			});
 			fila.classList.add("ok");
-			fila.lastElementChild.textContent = ficha.duplicado ? "Ya estaba en la biblioteca" : `${ficha.paginas} págs. · guardado`;
+			fila.lastElementChild.textContent = ficha.duplicado
+				? "Ya estaba en la biblioteca"
+				: `${ficha.paginas} págs. · guardado${ficha.ocr?.estado === "pendiente" ? " · OCR en cola" : ""}`;
 			ultimo = ficha.id;
 		} catch (error) {
 			fila.classList.add("error");
@@ -216,6 +218,7 @@ async function seleccionar(id) {
 	estado.ficha = ficha;
 	estado.pagina = "todo";
 	estado.cargadas.clear();
+	clearTimeout(estado.temporizadorOcr);
 	history.replaceState(null, "", `#doc=${encodeURIComponent(id)}`);
 	for (const boton of document.querySelectorAll("#lista button")) boton.setAttribute("aria-current", String(boton.dataset.id === id));
 
@@ -234,6 +237,96 @@ async function seleccionar(id) {
 	rellenarOpcionesXml($("#opciones-xml"), ficha.opcionesXml);
 	$("#visor-pdf").removeAttribute("src");
 	mostrarPestana(estado.pestana);
+	vigilarOcr();
+}
+
+// ---------- OCR ----------
+
+const OCR_EN_CURSO = ["pendiente", "procesando"];
+
+function paginasConOcr(ficha) {
+	return new Set(ficha.ocr?.estado === "listo" ? ficha.ocr.conTexto : []);
+}
+
+/** Contenido de la fila "OCR" del resumen: estado y, si corresponde, el botón para aplicarlo. */
+function pintarOcr(dd, ficha) {
+	const { ocr } = ficha;
+	const lista = (paginas) => (paginas.length === 1 ? `pág. ${paginas[0]}` : `págs. ${paginas.join(", ")}`);
+	let texto;
+	let boton = null;
+	if (!ocr) {
+		const sinTexto = ficha.paginasSinTexto;
+		if (sinTexto && !sinTexto.length) texto = "No hace falta: todas las páginas tienen texto.";
+		else {
+			texto = sinTexto ? `Sin aplicar. ${sinTexto.length} ${sinTexto.length === 1 ? "página no tiene" : "páginas no tienen"} texto (${lista(sinTexto)}).` : "Sin aplicar.";
+			boton = "Aplicar OCR";
+		}
+	} else if (ocr.estado === "pendiente") {
+		texto = `En cola: ${ocr.paginas.length} ${ocr.paginas.length === 1 ? "página sin texto" : "páginas sin texto"}…`;
+	} else if (ocr.estado === "procesando") {
+		texto = `Leyendo con OCR: ${ocr.hechas} de ${ocr.paginas.length} páginas…`;
+	} else if (ocr.estado === "listo") {
+		texto = ocr.conTexto.length
+			? `${ocr.conTexto.length} de ${ocr.paginas.length} páginas sin texto tenían texto en la imagen (${lista(ocr.conTexto)}) · confianza media ${ocr.confianza} % · ${ocr.idiomas}`
+			: `Ninguna de las ${ocr.paginas.length} páginas sin texto tenía texto legible en la imagen.`;
+		boton = "Repetir OCR";
+	} else if (ocr.estado === "no-necesario") {
+		texto = "No hace falta: todas las páginas tienen texto.";
+	} else {
+		texto = `Falló: ${ocr.error}`;
+		boton = "Reintentar OCR";
+	}
+	dd.textContent = texto;
+	if (ocr?.estado === "listo" && ocr.conTexto.length) {
+		const enlace = document.createElement("a");
+		enlace.href = `/api/documentos/${encodeURIComponent(ficha.id)}/ocr?descargar=1`;
+		enlace.download = "";
+		enlace.textContent = "ocr.json";
+		dd.append(" · ", enlace);
+	}
+	if (boton) {
+		const elemento = document.createElement("button");
+		elemento.type = "button";
+		elemento.className = "boton secundario boton-ocr";
+		elemento.textContent = boton;
+		elemento.addEventListener("click", () => pedirOcr(elemento));
+		dd.append(" ", elemento);
+	}
+}
+
+async function pedirOcr(boton) {
+	boton.disabled = true;
+	try {
+		estado.ficha = await api(`/api/documentos/${encodeURIComponent(estado.ficha.id)}/ocr`, { method: "POST" });
+		pintarFicha(estado.ficha);
+		vigilarOcr();
+	} catch (error) {
+		avisar(error.message, true);
+		boton.disabled = false;
+	}
+}
+
+// Mientras el OCR está en cola o en curso, se consulta la ficha cada 2 s para mostrar el avance.
+function vigilarOcr() {
+	clearTimeout(estado.temporizadorOcr);
+	if (!OCR_EN_CURSO.includes(estado.ficha?.ocr?.estado)) return;
+	const id = estado.ficha.id;
+	estado.temporizadorOcr = setTimeout(async () => {
+		const ficha = await api(`/api/documentos/${encodeURIComponent(id)}`).catch(() => null);
+		if (!ficha || estado.ficha?.id !== id) return;
+		estado.ficha = ficha;
+		pintarFicha(ficha);
+		if (OCR_EN_CURSO.includes(ficha.ocr?.estado)) return vigilarOcr();
+		if (ficha.ocr?.estado === "listo") {
+			avisar(`OCR terminado: ${ficha.ocr.conTexto.length} de ${ficha.ocr.paginas.length} páginas con texto`);
+			// El JSON y el XML de esas páginas, y el texto, ahora incluyen el OCR.
+			for (const tipo of ["json", "xml", "texto"]) estado.cargadas.delete(tipo);
+			llenarSelectoresPagina(ficha);
+			mostrarPestana(estado.pestana);
+		} else if (ficha.ocr?.estado === "error") {
+			avisar(`El OCR falló: ${ficha.ocr.error}`, true);
+		}
+	}, 2000);
 }
 
 // ---------- Páginas ----------
@@ -248,9 +341,12 @@ function urlArchivo(tipo, parametros = {}) {
 }
 
 function llenarSelectoresPagina(ficha) {
+	const conOcr = paginasConOcr(ficha);
 	for (const selector of document.querySelectorAll(".selector-pagina")) {
 		const opciones = [new Option("Documento completo", "todo")];
-		for (let pagina = 1; pagina <= ficha.paginas; pagina++) opciones.push(new Option(`Página ${pagina} de ${ficha.paginas}`, String(pagina)));
+		for (let pagina = 1; pagina <= ficha.paginas; pagina++) {
+			opciones.push(new Option(`Página ${pagina} de ${ficha.paginas}${conOcr.has(pagina) ? " · con OCR" : ""}`, String(pagina)));
+		}
 		selector.replaceChildren(...opciones);
 		selector.value = estado.pagina;
 	}
@@ -287,6 +383,7 @@ function pintarFicha(ficha) {
 		["Texto extraído", `${ficha.caracteres.toLocaleString("es-PE")} caracteres`],
 		["Tamaños", `PDF ${tamano(ficha.bytes.pdf)} · JSON ${tamano(ficha.bytes.json)} · XML ${tamano(ficha.bytes.xml)}`],
 		["Por página", ficha.paginas ? `${ficha.paginas} JSON y ${ficha.paginas} XML en biblioteca/${ficha.id}/paginas/` : ""],
+		["OCR", "-"],
 		["XML", describirOpciones(ficha.opcionesXml)],
 		["Extraído con", ficha.transcoder],
 		["Agregado", fecha(ficha.agregado, true)],
@@ -307,6 +404,7 @@ function pintarFicha(ficha) {
 				} else {
 					dd.textContent = valor;
 				}
+				if (etiqueta === "OCR") pintarOcr(dd, ficha);
 				if (etiqueta === "Por página") {
 					const enlace = document.createElement("a");
 					enlace.href = `/api/documentos/${encodeURIComponent(ficha.id)}/paginas/zip?tipo=todo`;
@@ -349,8 +447,13 @@ async function pintarArchivo(tipo) {
 	const nota = $(`#nota-${tipo}`);
 	destino.textContent = "Cargando…";
 	nota.textContent = "";
+	// En la pestaña Texto se añade al final lo leído con OCR en las páginas que eran imagen.
+	const conOcr = tipo === "texto" && paginasConOcr(estado.ficha).size > 0;
 	try {
-		const respuesta = await fetch(urlArchivo(tipo, { limite: LIMITE_VISTA }));
+		const [respuesta, ocr] = await Promise.all([
+			fetch(urlArchivo(tipo, { limite: LIMITE_VISTA })),
+			conOcr ? api(`/api/documentos/${encodeURIComponent(id)}/ocr`).catch(() => null) : null,
+		]);
 		if (!respuesta.ok) throw new Error((await respuesta.json()).error);
 		const total = Number(respuesta.headers.get("X-Tamano-Total"));
 		const texto = await respuesta.text();
@@ -358,12 +461,21 @@ async function pintarArchivo(tipo) {
 		if (estado.ficha?.id !== id || (tipo !== "texto" && estado.pagina !== pagina)) return;
 		if (tipo === "json") destino.innerHTML = resaltarJson(texto);
 		else if (tipo === "xml") destino.innerHTML = resaltarXml(texto);
-		else destino.textContent = texto || "(El PDF no tiene texto extraíble; puede ser una imagen escaneada.)";
+		else destino.textContent = (texto || "(El PDF no tiene texto extraíble; puede ser una imagen escaneada.)") + textoOcr(ocr);
 		destino.scrollTop = 0;
 		nota.textContent = total > LIMITE_VISTA ? `Vista previa: primeros ${tamano(LIMITE_VISTA)} de ${tamano(total)}. Descarga el archivo para verlo completo.` : tamano(total);
+		if (ocr) nota.textContent += " · al final, el texto leído con OCR";
 	} catch (error) {
 		destino.textContent = `No se pudo cargar: ${error.message}`;
 	}
+}
+
+function textoOcr(ocr) {
+	if (!ocr) return "";
+	return Object.entries(ocr.paginas)
+		.filter(([, pagina]) => pagina.texto)
+		.map(([numero, pagina]) => `\n\n──── Página ${numero} · leída con OCR (confianza ${pagina.confianza} %) ────\n\n${pagina.texto}`)
+		.join("");
 }
 
 $("#eliminar").addEventListener("click", async () => {

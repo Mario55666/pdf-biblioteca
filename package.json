@@ -13,5 +13,12 @@
 	"engines": {
 		"node": ">=22.23.2"
 	},
-	"license": "Apache-2.0"
+	"license": "Apache-2.0",
+	"dependencies": {
+		"@napi-rs/canvas": "1.0.13",
+		"@tesseract.js-data/eng": "1.0.0",
+		"@tesseract.js-data/spa": "1.0.0",
+		"pdfjs-dist": "6.4.299",
+		"tesseract.js": "7.0.0"
+	}
 }

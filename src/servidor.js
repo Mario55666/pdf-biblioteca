@@ -12,6 +12,8 @@
 //                                          JSON o XML de la página n (admite ?descargar=1 y ?limite=N)
 //   GET    /api/documentos/:id/paginas/zip?tipo=json|xml|todo
 //                                          todas las páginas en un ZIP
+//   POST   /api/documentos/:id/ocr          (re)aplica el OCR a las páginas sin texto, en segundo plano
+//   GET    /api/documentos/:id/ocr          resultado del OCR (ocr.json); el avance está en la ficha (ocr.estado)
 
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -39,6 +41,33 @@ const TIPOS = {
 };
 
 const biblioteca = new Biblioteca();
+
+// El OCR es lento y usa mucha CPU: se hace en segundo plano y de a un documento.
+const enColaOcr = new Set();
+let colaOcr = Promise.resolve();
+
+function encolarOcr(id) {
+	if (enColaOcr.has(id)) return;
+	enColaOcr.add(id);
+	colaOcr = colaOcr.then(async () => {
+		try {
+			const ficha = await biblioteca.aplicarOcr(id, { alProgresar: (hechas, total) => console.log(`OCR ${id}: página ${hechas} de ${total}`) });
+			console.log(`OCR listo: ${id} (${ficha.ocr.conTexto?.length ?? 0} de ${ficha.ocr.paginas.length} páginas con texto)`);
+		} catch (error) {
+			console.error(`OCR de ${id} falló: ${error.message}`);
+		} finally {
+			enColaOcr.delete(id);
+		}
+	});
+}
+
+/** Marca el OCR como pendiente y lo encola, salvo que ya esté en la cola o no haga falta. */
+async function pedirOcr(id) {
+	if (enColaOcr.has(id)) return biblioteca.obtener(id);
+	const ficha = await biblioteca.marcarOcrPendiente(id);
+	if (ficha.ocr.estado === "pendiente") encolarOcr(id);
+	return ficha;
+}
 
 async function atender(peticion, respuesta) {
 	const url = new URL(peticion.url, "http://localhost");
@@ -73,7 +102,8 @@ async function atenderApi(peticion, respuesta, url) {
 			const contenido = await leerCuerpo(peticion, MAXIMO_PDF);
 			const { ficha, duplicado } = await biblioteca.agregar(contenido, nombre);
 			console.log(duplicado ? `Ya estaba en la biblioteca: ${ficha.id}` : `Agregado: ${ficha.id} (${ficha.paginas} págs.)`);
-			return enviarJson(respuesta, duplicado ? 200 : 201, { ...ficha, duplicado });
+			if (duplicado) return enviarJson(respuesta, 200, { ...ficha, duplicado });
+			return enviarJson(respuesta, 201, { ...(await pedirOcr(ficha.id)), duplicado });
 		}
 	}
 
@@ -113,6 +143,11 @@ async function atenderApi(peticion, respuesta, url) {
 		}
 	}
 
+	if (partes.length === 3 && archivo === "ocr" && metodo === "POST") {
+		if (!(await biblioteca.obtener(id))) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		return enviarJson(respuesta, 202, await pedirOcr(id));
+	}
+
 	if (partes.length === 3 && ARCHIVOS[archivo]) {
 		if (metodo === "GET") return servirArchivoDocumento(respuesta, url, id, archivo);
 		if (metodo === "PUT" && archivo === "xml") {
@@ -139,6 +174,7 @@ async function servirArchivoDocumento(respuesta, url, id, archivo) {
 
 // Envía un archivo; con ?limite=N solo sus primeros N bytes y con ?descargar como descarga.
 async function servirArchivo(respuesta, url, ruta, tipoContenido, nombreDescarga) {
+	if (!existsSync(ruta)) throw new ErrorBiblioteca(`Este documento no tiene ${path.basename(ruta)}`, 404);
 	const total = (await stat(ruta)).size;
 	const limite = Number(url.searchParams.get("limite")) || 0;
 	const parcial = limite > 0 && limite < total;
@@ -187,6 +223,11 @@ function leerCuerpo(peticion, maximo) {
 function enviarJson(respuesta, estado, datos) {
 	respuesta.writeHead(estado, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
 	respuesta.end(JSON.stringify(datos));
+}
+
+// Retoma el OCR de los documentos que quedaron a medias si el servidor se cerró mientras trabajaba.
+for (const ficha of await biblioteca.listar()) {
+	if (["pendiente", "procesando"].includes(ficha.ocr?.estado)) encolarOcr(ficha.id);
 }
 
 createServer(atender).listen(PUERTO, "127.0.0.1", () => {

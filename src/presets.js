@@ -15,6 +15,9 @@ const ATRIBUTOS_PDF2JSON = {
 	"Pages/Boxsets/boxes": ["style", "TI", "AM", "TU", "x", "y", "w", "h", "V", "checked"],
 	"Pages/Boxsets/boxes/T": ["Name"],
 	"Pages/Boxsets/boxes/id": ["Id", "EN"],
+	// Solo en el JSON y el XML de las páginas leídas con OCR.
+	OCR: ["motor", "idiomas", "confianza"],
+	"OCR/lineas": ["confianza", "x", "y", "w", "h"],
 };
 
 /**

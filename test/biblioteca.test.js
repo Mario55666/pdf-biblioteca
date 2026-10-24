@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Biblioteca, dividirEnPaginas } from "../src/biblioteca.js";
+import { Biblioteca, dividirEnPaginas, paginasSinTexto } from "../src/biblioteca.js";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PDF_EJEMPLO = path.join(RAIZ, "vendor", "pdf2json", "test", "pdf", "fd", "form", "F1040EZ.pdf");
@@ -68,6 +68,15 @@ test("divide en páginas conservando Transcoder y Meta", () => {
 	const paginas = dividirEnPaginas({ Transcoder: "t", Meta: { Title: "x" }, Pages: [{ Width: 1 }, { Width: 2 }] });
 	assert.deepEqual(paginas[1], { Transcoder: "t", Meta: { Title: "x" }, Pagina: 2, TotalPaginas: 2, Pages: [{ Width: 2 }] });
 	assert.deepEqual(dividirEnPaginas({ Transcoder: "t", Meta: {} }), []);
+});
+
+test("solo las páginas leídas con OCR llevan la clave OCR", () => {
+	const json = { Transcoder: "t", Meta: {}, Pages: [{ Texts: [] }, { Texts: [{ x: 1 }] }] };
+	assert.deepEqual(paginasSinTexto(json), [1]);
+	const ocr = { motor: "tesseract.js", idiomas: "spa", paginas: { 1: { confianza: 90, texto: "Hola", lineas: [] } } };
+	const [primera, segunda] = dividirEnPaginas(json, ocr);
+	assert.deepEqual(primera.OCR, { motor: "tesseract.js", idiomas: "spa", confianza: 90, texto: "Hola", lineas: [] });
+	assert.equal("OCR" in segunda, false);
 });
 
 test("rechaza archivos que no son PDF", async () => {

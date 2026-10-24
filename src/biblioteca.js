@@ -8,7 +8,9 @@
 //     documento.xml   ese JSON convertido a XML
 //     texto.txt       el texto plano del PDF
 //     campos.json     los campos de formulario (si el PDF es un formulario)
+//     ocr.json        el texto leído con OCR en las páginas que no tienen texto (si se aplicó)
 //     paginas/        un JSON y un XML por página: pagina-001.json, pagina-001.xml...
+//                     (las páginas con OCR llevan además la clave OCR)
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -30,6 +32,7 @@ export const ARCHIVOS = Object.freeze({
 	xml: { nombre: "documento.xml", tipo: "application/xml; charset=utf-8", extension: "xml" },
 	texto: { nombre: "texto.txt", tipo: "text/plain; charset=utf-8", extension: "txt" },
 	campos: { nombre: "campos.json", tipo: "application/json; charset=utf-8", extension: "campos.json" },
+	ocr: { nombre: "ocr.json", tipo: "application/json; charset=utf-8", extension: "ocr.json" },
 });
 
 export const TIPOS_PAGINA = Object.freeze({ json: ARCHIVOS.json.tipo, xml: ARCHIVOS.xml.tipo });
@@ -78,6 +81,9 @@ export class Biblioteca {
 			versionPdf: meta.PDFFormatVersion ?? "",
 			esFormulario: Boolean(meta.IsAcroFormPresent),
 			paginas: json.Pages?.length ?? 0,
+			// Páginas sin texto extraíble (suelen ser imágenes): son las que se leen con OCR.
+			paginasSinTexto: paginasSinTexto(json),
+			ocr: null,
 			campos: campos.length,
 			caracteres: texto.length,
 			bytes: { pdf: contenido.length, json: Buffer.byteLength(textoJson), xml: Buffer.byteLength(xml) },
@@ -120,13 +126,16 @@ export class Biblioteca {
 		}
 		fichas.sort((a, b) => b.agregado.localeCompare(a.agregado));
 
-		// Un documento coincide si contiene todas las palabras buscadas, en sus datos o en su texto.
+		// Un documento coincide si contiene todas las palabras buscadas, en sus datos o en su texto
+		// (incluido el leído con OCR).
 		const palabras = normalizar(busqueda).split(/\s+/).filter(Boolean);
 		if (!palabras.length) return fichas;
 		const resultados = [];
 		for (const ficha of fichas) {
 			const datos = normalizar(`${ficha.nombre} ${ficha.titulo} ${ficha.autor} ${ficha.asunto}`);
-			const texto = await readFile(this.ruta(ficha.id, "texto"), "utf8").catch(() => "");
+			const ocr = await this.leerOcr(ficha.id);
+			const textoOcr = Object.values(ocr?.paginas ?? {}).map((pagina) => pagina.texto).join("\n");
+			const texto = `${await readFile(this.ruta(ficha.id, "texto"), "utf8").catch(() => "")}\n${textoOcr}`;
 			const textoNormalizado = normalizar(texto);
 			if (!palabras.every((palabra) => datos.includes(palabra) || textoNormalizado.includes(palabra))) continue;
 			const palabraEnTexto = palabras.find((palabra) => textoNormalizado.includes(palabra));
@@ -211,9 +220,108 @@ export class Biblioteca {
 		const xml = jsonAXml(json, opciones);
 		await writeFile(this.ruta(id, "xml"), xml);
 		await escribirPaginas(path.join(this.carpeta, id), json, opciones);
-		const actualizada = { ...ficha, opcionesXml: opciones, bytes: { ...ficha.bytes, xml: Buffer.byteLength(xml) } };
-		await writeFile(path.join(this.carpeta, id, "ficha.json"), JSON.stringify(actualizada, null, 2));
+		const actualizada = await this.#actualizarFicha(id, { opcionesXml: opciones, bytes: { ...ficha.bytes, xml: Buffer.byteLength(xml) } });
 		return { ficha: actualizada, xml };
+	}
+
+	/** @returns {Promise<object|null>} el contenido de ocr.json, o null si no se ha aplicado OCR */
+	async leerOcr(id) {
+		try {
+			return JSON.parse(await readFile(this.ruta(id, "ocr"), "utf8"));
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Deja el OCR del documento en estado "pendiente" (o "no-necesario" si todas sus páginas
+	 * tienen texto), para que el servidor lo procese en segundo plano.
+	 * @returns {Promise<object>} la ficha actualizada
+	 */
+	async marcarOcrPendiente(id) {
+		const ficha = await this.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const paginas = ficha.paginasSinTexto ?? paginasSinTexto(JSON.parse(await readFile(this.ruta(id, "json"), "utf8")));
+		const estado = paginas.length ? "pendiente" : "no-necesario";
+		return this.#actualizarFicha(id, { paginasSinTexto: paginas, ocr: { estado, paginas, hechas: 0, actualizado: new Date().toISOString() } });
+	}
+
+	/**
+	 * Lee con OCR (Tesseract, sin conexión) las páginas que no tienen texto, guarda el resultado en
+	 * ocr.json y lo añade al JSON y al XML de esas páginas. El avance queda en ficha.ocr.
+	 * @param {object} [opciones]
+	 * @param {string} [opciones.idiomas] ej. "spa+eng"
+	 * @param {(hechas: number, total: number) => void} [opciones.alProgresar]
+	 * @returns {Promise<object>} la ficha actualizada
+	 */
+	async aplicarOcr(id, { idiomas, alProgresar = () => {} } = {}) {
+		if (!(await this.obtener(id))) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const carpetaDocumento = path.join(this.carpeta, id);
+		const json = JSON.parse(await readFile(this.ruta(id, "json"), "utf8"));
+		const paginas = paginasSinTexto(json);
+		const ahora = () => new Date().toISOString();
+		if (!paginas.length) {
+			return this.#actualizarFicha(id, { paginasSinTexto: [], ocr: { estado: "no-necesario", paginas, hechas: 0, actualizado: ahora() } });
+		}
+
+		// El OCR se carga solo cuando hace falta: pesa bastante y el resto del aplicativo no lo necesita.
+		const ocr = await import("./ocr.js").catch((error) => {
+			throw new ErrorBiblioteca(`No se pudo cargar el OCR (¿falta ejecutar npm install?): ${error.message}`, 500);
+		});
+		idiomas ??= ocr.IDIOMAS_POR_DEFECTO;
+		const estado = { estado: "procesando", paginas, hechas: 0, idiomas, actualizado: ahora() };
+		await this.#actualizarFicha(id, { paginasSinTexto: paginas, ocr: estado });
+
+		try {
+			const resultados = await ocr.leerPaginas(await readFile(this.ruta(id, "pdf")), paginas, {
+				idiomas,
+				alProgresar: async (hechas, total) => {
+					await this.#actualizarFicha(id, { ocr: { ...estado, hechas, actualizado: ahora() } });
+					alProgresar(hechas, total);
+				},
+			});
+
+			// Las coordenadas se pasan a las unidades de pdf2json para poder compararlas con Texts.
+			const guardado = { ...ocr.descripcionMotor(idiomas), fecha: ahora(), paginas: {} };
+			for (const resultado of resultados) {
+				const { Width, Height } = json.Pages[resultado.pagina - 1];
+				guardado.paginas[resultado.pagina] = {
+					confianza: resultado.confianza,
+					texto: resultado.texto,
+					lineas: resultado.lineas.map((linea) => ({
+						texto: linea.texto,
+						confianza: linea.confianza,
+						x: redondear(linea.x * Width),
+						y: redondear(linea.y * Height),
+						w: redondear(linea.w * Width),
+						h: redondear(linea.h * Height),
+					})),
+				};
+			}
+			await writeFile(this.ruta(id, "ocr"), JSON.stringify(guardado, null, 2));
+			await escribirPaginas(carpetaDocumento, json, (await this.obtener(id)).opcionesXml);
+
+			const conTexto = resultados.filter((resultado) => resultado.lineas.length);
+			const confianza = conTexto.length ? Math.round(conTexto.reduce((suma, r) => suma + r.confianza, 0) / conTexto.length) : 0;
+			return this.#actualizarFicha(id, {
+				ocr: { estado: "listo", paginas, hechas: paginas.length, conTexto: conTexto.map((r) => r.pagina), confianza, idiomas, actualizado: ahora() },
+			});
+		} catch (error) {
+			if (await this.obtener(id)) {
+				await this.#actualizarFicha(id, { ocr: { ...estado, estado: "error", error: error.message, actualizado: ahora() } });
+			}
+			throw error;
+		}
+	}
+
+	// Lee la ficha justo antes de escribirla, para no pisar cambios hechos mientras tanto
+	// (el OCR avanza en segundo plano mientras se puede, por ejemplo, regenerar el XML).
+	async #actualizarFicha(id, cambios) {
+		const ficha = await this.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const actualizada = { ...ficha, ...cambios };
+		await writeFile(path.join(this.carpeta, id, "ficha.json"), JSON.stringify(actualizada, null, 2));
+		return actualizada;
 	}
 
 	/** Borra el documento y todos sus archivos de la biblioteca. */
@@ -235,16 +343,21 @@ export class ErrorBiblioteca extends Error {
  * Divide la salida de pdf2json en un documento por página. Cada uno conserva la forma del
  * original (Transcoder, Meta, Pages con una sola página), así las rutas de forceAttribute y
  * forceContent, como /PDF/Pages/Texts/x, sirven igual para el documento completo y sus páginas.
+ * Si se pasa el contenido de ocr.json, las páginas leídas con OCR llevan además la clave OCR.
  */
-export function dividirEnPaginas(json) {
+export function dividirEnPaginas(json, ocr = null) {
 	const paginas = json.Pages ?? [];
-	return paginas.map((pagina, indice) => ({
-		Transcoder: json.Transcoder,
-		Meta: json.Meta,
-		Pagina: indice + 1,
-		TotalPaginas: paginas.length,
-		Pages: [pagina],
-	}));
+	return paginas.map((pagina, indice) => {
+		const documento = { Transcoder: json.Transcoder, Meta: json.Meta, Pagina: indice + 1, TotalPaginas: paginas.length, Pages: [pagina] };
+		const leida = ocr?.paginas?.[indice + 1];
+		if (leida) documento.OCR = { motor: ocr.motor, idiomas: ocr.idiomas, ...leida };
+		return documento;
+	});
+}
+
+/** Números de las páginas sin ningún texto extraíble (normalmente, páginas que son una imagen). */
+export function paginasSinTexto(json) {
+	return (json.Pages ?? []).flatMap((pagina, indice) => (pagina.Texts?.length ? [] : [indice + 1]));
 }
 
 function nombrePagina(numero, extension) {
@@ -254,7 +367,8 @@ function nombrePagina(numero, extension) {
 async function escribirPaginas(carpetaDocumento, json, opcionesXml) {
 	const carpeta = path.join(carpetaDocumento, CARPETA_PAGINAS);
 	await mkdir(carpeta, { recursive: true });
-	for (const pagina of dividirEnPaginas(json)) {
+	const ocr = await readFile(path.join(carpetaDocumento, ARCHIVOS.ocr.nombre), "utf8").then(JSON.parse, () => null);
+	for (const pagina of dividirEnPaginas(json, ocr)) {
 		await Promise.all([
 			writeFile(path.join(carpeta, nombrePagina(pagina.Pagina, "json")), JSON.stringify(pagina, null, 2)),
 			writeFile(path.join(carpeta, nombrePagina(pagina.Pagina, "xml")), jsonAXml(pagina, opcionesXml)),
@@ -292,6 +406,11 @@ function normalizar(texto) {
 
 function textoMeta(valor) {
 	return typeof valor === "string" ? valor.trim() : "";
+}
+
+// Tres decimales, como las coordenadas de pdf2json.
+function redondear(valor) {
+	return Number(valor.toFixed(3));
 }
 
 // La búsqueda se hace sobre el texto normalizado (sin tildes), así que primero se traduce

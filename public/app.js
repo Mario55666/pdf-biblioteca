@@ -355,6 +355,10 @@ function llenarSelectoresPagina(ficha) {
 
 function actualizarDescargasPagina() {
 	for (const enlace of document.querySelectorAll("[data-descargar]")) enlace.href = urlArchivo(enlace.dataset.descargar, { descargar: 1 });
+	// El paquete InDesign sigue la misma elección: una página o el documento completo.
+	const indesign = $("#descargar-indesign");
+	indesign.href = `/api/documentos/${encodeURIComponent(estado.ficha.id)}/indesign${estado.pagina === "todo" ? "" : `?paginas=${estado.pagina}`}`;
+	indesign.textContent = estado.pagina === "todo" ? "InDesign (.zip)" : `InDesign pág. ${estado.pagina} (.zip)`;
 }
 
 // JSON y XML comparten la página elegida, así se puede comparar la misma página en los dos formatos.

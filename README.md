@@ -7,6 +7,7 @@ Aplicativo local que:
 3. **Convierte ese JSON a XML** con la lógica de `JsonToXml` de [XmlToJson](https://github.com/smart-fun/XmlToJson) (incluidas sus opciones `forceAttribute` y `forceContent`).
 4. **Separa el JSON y el XML por páginas**: además del documento completo, guarda un JSON y un XML por cada página.
 5. **Lee con OCR las páginas sin texto** (portadas, anuncios o páginas escaneadas que son solo una imagen) con Tesseract, sin conexión, y lo guarda en el JSON y el XML de esas páginas.
+6. **Reconstruye el documento en Adobe InDesign** con la librería [porky](https://github.com/Schreiber-und-Freunde/porky): genera un paquete con el JSON (geometría) y el XML (contenido) y un script que crea páginas, capas, estilos y marcos; el perfil resultante actualiza el [Atlas de la diagramación](#reconstrucción-en-indesign).
 
 Se usa desde el navegador (arrastrar y soltar PDFs, buscar, ver y descargar) o desde la terminal.
 
@@ -66,6 +67,27 @@ Las coordenadas de cada línea están en las mismas unidades que pdf2json usa en
 
 Los idiomas por defecto son español e inglés (`spa+eng`). Para otros, instala su paquete (`npm install @tesseract.js-data/fra`) y usa `--idiomas spa+fra` en la terminal o la variable `OCR_IDIOMAS=spa+fra` al iniciar el servidor.
 
+## Reconstrucción en InDesign
+
+El botón **InDesign (.zip)** de la ficha (o `npm run cli -- indesign <id>`) genera un paquete para reconstruir el documento en Adobe InDesign (CS6 o posterior; probado en InDesign 2026). La guía completa, con los protocolos XML y el procedimiento para actualizar el Atlas, está en la landing del Atlas: `Atlas-Diagramacion/reconstruccion-indesign.html`.
+
+El paquete separa dos instrumentos:
+
+- **`datos/plan.json` (dónde y cómo):** páginas, capas, colores, estilos de párrafo y la posición de cada texto, relleno, línea, campo y línea de OCR, en puntos.
+- **`datos/documento.xml` (qué):** un elemento por componente, con el texto, `aid:pstyle` para que InDesign aplique el estilo al importar y `syncScript`/`syncIdentifier` para la sincronización de porky. Se valida con `datos/atlas-indesign.dtd`.
+
+En InDesign, `reconstruir.jsx` (porky + `lib/atlas-porky.jsx`) crea el documento con seis capas (Original PDF, Rellenos, Líneas, Campos, Texto y OCR), importa el XML, coloca cada elemento en su marco y guarda en `salida/` el `.indd`, el `.idml`, el XML exportado, vistas JPG e `informe.json`. Si corriges el XML, `sincronizar.jsx` actualiza el contenido sin reconstruir.
+
+**Calibración tipográfica.** pdf2json mide en unidades de 16 pt y, según el PDF, guarda el cuerpo en píxeles o en puntos y el ancho en puntos o en fracciones del cuerpo. Al generar el paquete, `src/metricas.js` empareja cada texto con su medida en pdf.js (98 a 99 % de los textos) y toma de ahí el cuerpo y el ancho reales; InDesign ajusta la escala horizontal para que el texto ocupe lo mismo que en el original aunque la fuente sea la de respaldo. pdf.js 6 no entrega el nombre de las fuentes incrustadas, solo el de las del sistema (Helvetica, Times…).
+
+**Actualizar el Atlas:**
+
+```bash
+npm run cli -- atlas <id> --atlas "<carpeta del Atlas>" --informe "<paquete>/salida/informe.json"
+```
+
+Escribe `reconstrucciones/<id>.json` en el Atlas, añade la entrada a `diagramacion.json → pdf.reconstrucciones` (con copia `diagramacion.json.bak`) y ejecuta su `actualizar.mjs`.
+
 ## Uso en la terminal
 
 ```bash
@@ -75,6 +97,8 @@ npm run cli -- listar palabra a buscar
 npm run cli -- xml <id> --compacto --sangria 2
 npm run cli -- paginas <id>
 npm run cli -- ocr <id> --idiomas spa+eng
+npm run cli -- indesign <id> --paginas 1-8 --salida C:\Reconstrucciones
+npm run cli -- atlas <id> --atlas "<carpeta del Atlas>" --informe "<paquete>/salida/informe.json"
 npm run cli -- json2xml datos.json datos.xml --atributo /owner/id --contenido /owner/name
 npm run cli -- eliminar <id>
 ```
@@ -138,6 +162,10 @@ src/presets.js                 rutas del preset compacto para pdf2json
 src/biblioteca.js              guardar, listar, buscar, separar por páginas, regenerar y eliminar documentos
 src/zip.js                     crea los ZIP de páginas (sin dependencias)
 src/ocr.js                     OCR sin conexión: pdf.js dibuja la página y tesseract.js la lee
+src/indesign.js                paquete InDesign: plan JSON, XML con aid:pstyle, DTD y perfil para el Atlas
+src/metricas.js                calibración tipográfica de pdf2json con pdf.js
+src/atlas.js                   incorpora un perfil al Atlas de la diagramación
+indesign/                      scripts de InDesign: reconstruir.jsx, sincronizar.jsx, lib/atlas-porky.jsx y porky/
 src/servidor.js                servidor web local y API REST
 src/cli.js                     comandos de terminal
 public/                        interfaz web
@@ -157,6 +185,7 @@ El servidor escucha solo en este equipo (127.0.0.1).
 | `GET` | `/api/documentos/:id/{pdf,json,xml,texto,campos}` | Descarga un archivo (`?descargar=1`) |
 | `PUT` | `/api/documentos/:id/xml` | Regenera el XML completo y por página (cuerpo: `{"raiz", "sangria", "atributos", "contenido"}`) |
 | `POST` | `/api/documentos/:id/ocr` | Aplica (o repite) el OCR en segundo plano; el avance queda en `ficha.ocr` |
+| `GET` | `/api/documentos/:id/indesign?paginas=1-5` | Paquete ZIP para reconstruir el documento (o esas páginas) en InDesign |
 | `GET` | `/api/documentos/:id/ocr` | El resultado del OCR (`ocr.json`) |
 | `GET` | `/api/documentos/:id/paginas/:n/{json,xml}` | JSON o XML de la página `n` (`?descargar=1`) |
 | `GET` | `/api/documentos/:id/paginas/zip?tipo=json\|xml\|todo` | Todas las páginas en un ZIP |
@@ -169,4 +198,4 @@ curl -X POST -H "X-Nombre-Archivo: factura.pdf" --data-binary @factura.pdf http:
 
 ## Licencias
 
-pdf2json, XmlToJson, tesseract.js (y los datos de idioma de Tesseract) y pdf.js se distribuyen con licencia Apache 2.0; @napi-rs/canvas, con licencia MIT. `src/jsonAXml.js` conserva el aviso de copyright de XmlToJson (Arnaud Guyon).
+pdf2json, XmlToJson, tesseract.js (y los datos de idioma de Tesseract) y pdf.js se distribuyen con licencia Apache 2.0; @napi-rs/canvas, con licencia MIT. porky (Schreiber & Freunde) se incluye en `indesign/porky/` con su licencia MIT; solo los archivos que usan los scripts. `src/jsonAXml.js` conserva el aviso de copyright de XmlToJson (Arnaud Guyon).

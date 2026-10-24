@@ -4,13 +4,16 @@
 //   node src/cli.js xml <id> --compacto --sangria 2
 //   node src/cli.js paginas <id>
 //   node src/cli.js ocr <id> --idiomas spa+eng
+//   node src/cli.js indesign <id> --paginas 1-5 --salida ./paquetes
 //   node src/cli.js json2xml datos.json datos.xml --raiz datos --atributo /datos/id
 //   node src/cli.js eliminar <id>
 
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { Biblioteca, normalizarOpcionesXml, OPCIONES_XML_POR_DEFECTO } from "./biblioteca.js";
+import { crearPaqueteIndesign, leerRangoPaginas } from "./indesign.js";
+import { incorporarAlAtlas } from "./atlas.js";
 import { jsonAXml } from "./jsonAXml.js";
 import { presetCompactoPdf2json } from "./presets.js";
 
@@ -24,6 +27,11 @@ Comandos:
                              que aún no lo tienen); --idiomas spa+eng por defecto
   xml <id>                   Vuelve a generar el XML de un documento (completo y por página) con otras opciones
   paginas <id>...            Vuelve a separar el JSON y el XML por página (todos los documentos si no indicas id)
+  indesign <id>              Escribe el paquete para reconstruir el documento en InDesign
+                             (--paginas 1-5 para una parte; --salida <carpeta>, por defecto la actual)
+  atlas <id> --atlas <carpeta>
+                             Incorpora el perfil del documento al Atlas de la diagramación
+                             (--informe <salida/informe.json> añade el resultado de InDesign)
   json2xml <entrada.json> [salida.xml]
                              Convierte cualquier JSON a XML (sin usar la biblioteca)
   eliminar <id>              Borra un documento de la biblioteca
@@ -47,6 +55,10 @@ const { values: opciones, positionals } = parseArgs({
 		compacto: { type: "boolean" },
 		"sin-ocr": { type: "boolean" },
 		idiomas: { type: "string" },
+		paginas: { type: "string" },
+		salida: { type: "string" },
+		atlas: { type: "string" },
+		informe: { type: "string" },
 		ayuda: { type: "boolean", short: "h" },
 	},
 });
@@ -130,6 +142,31 @@ async function main() {
 				console.log(id);
 				await aplicarOcr(id);
 			}
+			break;
+		}
+		case "indesign": {
+			const [id] = argumentos;
+			const ficha = await biblioteca.obtener(id ?? "");
+			if (!ficha) throw new Error(`No existe el documento "${id}"`);
+			const { carpeta, archivos } = await crearPaqueteIndesign(biblioteca, id, { paginas: leerRangoPaginas(opciones.paginas, ficha.paginas) });
+			const destino = path.resolve(opciones.salida ?? ".", carpeta);
+			for (const { nombre, contenido } of archivos) {
+				await mkdir(path.dirname(path.join(destino, nombre)), { recursive: true });
+				await writeFile(path.join(destino, nombre), contenido);
+			}
+			console.log(`Paquete InDesign en ${destino}`);
+			console.log(`En InDesign: panel Scripts > reconstruir.jsx (copia la carpeta a la carpeta de scripts de Usuario).`);
+			break;
+		}
+		case "atlas": {
+			const [id] = argumentos;
+			if (!id || !opciones.atlas) throw new Error("Uso: atlas <id> --atlas <carpeta del Atlas> [--informe <salida/informe.json>]");
+			const { entrada, archivo, salidaActualizar } = await incorporarAlAtlas(biblioteca, id, path.resolve(opciones.atlas), { informe: opciones.informe });
+			const p = entrada.perfil;
+			console.log(`Perfil guardado en ${archivo}`);
+			console.log(`   ${entrada.titulo} · ${p.formato_mm} mm · cuerpo base ${p.cuerpo_base_pt} pt · ${p.columnas_texto ?? "—"} columnas`);
+			if (entrada.indesign) console.log(`   InDesign ${entrada.indesign.version}: ${entrada.indesign.paginas.length} páginas reconstruidas, validación DTD ${entrada.indesign.validacion_dtd}`);
+			console.log(`diagramacion.json actualizado (copia en diagramacion.json.bak)\n${salidaActualizar}`);
 			break;
 		}
 		case "xml": {

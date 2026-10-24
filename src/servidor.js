@@ -12,6 +12,8 @@
 //                                          JSON o XML de la página n (admite ?descargar=1 y ?limite=N)
 //   GET    /api/documentos/:id/paginas/zip?tipo=json|xml|todo
 //                                          todas las páginas en un ZIP
+//   GET    /api/documentos/:id/indesign?paginas=1-5
+//                                          paquete ZIP para reconstruir el documento en InDesign (porky)
 //   POST   /api/documentos/:id/ocr          (re)aplica el OCR a las páginas sin texto, en segundo plano
 //   GET    /api/documentos/:id/ocr          resultado del OCR (ocr.json); el avance está en la ficha (ocr.estado)
 
@@ -23,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { ARCHIVOS, Biblioteca, ErrorBiblioteca, OPCIONES_XML_POR_DEFECTO, TIPOS_PAGINA } from "./biblioteca.js";
 import { presetCompactoPdf2json } from "./presets.js";
 import { crearZip } from "./zip.js";
+import { crearPaqueteIndesign, leerRangoPaginas } from "./indesign.js";
 
 const RAIZ_PROYECTO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLICO = path.join(RAIZ_PROYECTO, "public");
@@ -141,6 +144,22 @@ async function atenderApi(peticion, respuesta, url) {
 			const ruta = await biblioteca.rutaPagina(id, numero, tipo);
 			return servirArchivo(respuesta, url, ruta, TIPOS_PAGINA[tipo], `${base}-${path.basename(ruta)}`);
 		}
+	}
+
+	if (partes.length === 3 && archivo === "indesign" && metodo === "GET") {
+		const ficha = await biblioteca.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		let paginas;
+		try {
+			paginas = leerRangoPaginas(url.searchParams.get("paginas"), ficha.paginas);
+		} catch (error) {
+			throw new ErrorBiblioteca(error.message, 400);
+		}
+		const { carpeta, archivos } = await crearPaqueteIndesign(biblioteca, id, { paginas });
+		// Todo dentro de una carpeta, para copiarla tal cual al panel Scripts de InDesign.
+		const zip = crearZip(archivos.map(({ nombre, contenido }) => ({ nombre: `${carpeta}/${nombre}`, contenido })));
+		respuesta.writeHead(200, { "Content-Type": "application/zip", "Content-Length": zip.length, "Content-Disposition": disposicion(`${carpeta}.zip`) });
+		return respuesta.end(zip);
 	}
 
 	if (partes.length === 3 && archivo === "ocr" && metodo === "POST") {

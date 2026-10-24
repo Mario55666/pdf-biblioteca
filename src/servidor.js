@@ -18,7 +18,8 @@
 //   GET    /api/documentos/:id/ocr          resultado del OCR (ocr.json); el avance está en la ficha (ocr.estado)
 //
 // Páginas locales, como el Atlas de la diagramación abierto como archivo (file://, origen "null")
-// o servido en localhost, pueden subir un PDF (POST /api/documentos) y consultar ese documento
+// o servido en localhost, y el Atlas publicado en https://mario55666.github.io (más los orígenes de
+// la variable ORIGENES) pueden subir un PDF (POST /api/documentos) y consultar ese documento
 // (GET /api/documentos/:id/...). La lista de la biblioteca y las rutas que borran o modifican no
 // aceptan otros orígenes.
 
@@ -78,11 +79,17 @@ async function pedirOcr(id) {
 }
 
 const ORIGEN_LOCAL = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+// Páginas publicadas que también pueden usarla: el Atlas en GitHub Pages y las que se añadan con
+// la variable ORIGENES (separadas por comas).
+const ORIGENES_PUBLICADOS = new Set([
+	"https://mario55666.github.io",
+	...(process.env.ORIGENES || "").split(",").map((origen) => origen.trim()).filter(Boolean),
+]);
 
 /** Devuelve el origen al que se permite la petición entre orígenes, o null si no se permite. */
 function origenPermitido(peticion, url) {
 	const origen = peticion.headers.origin;
-	if (!origen || (origen !== "null" && !ORIGEN_LOCAL.test(origen))) return null;
+	if (!origen || (origen !== "null" && !ORIGEN_LOCAL.test(origen) && !ORIGENES_PUBLICADOS.has(origen))) return null;
 	const partes = url.pathname.split("/").filter(Boolean);
 	if (partes[0] !== "api" || partes[1] !== "documentos") return null;
 	const metodo = peticion.method === "OPTIONS" ? peticion.headers["access-control-request-method"] : peticion.method;

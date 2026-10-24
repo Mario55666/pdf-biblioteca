@@ -59,6 +59,8 @@ npm start
 
 Abre <http://localhost:8780> (otro puerto: variable `PUERTO`).
 
+El Atlas de la diagramación también puede enviarle PDF, abierto como archivo, desde localhost o publicado en <https://mario55666.github.io/atlas-diagramacion/>. En la versión publicada, Chrome pide permiso para que la página acceda a apps y servicios de este dispositivo: hay que pulsar «Permitir». Para aceptar otras páginas publicadas, añade sus orígenes en la variable `ORIGENES`, separados por comas.
+
 - **Biblioteca**: arrastra uno o varios PDF a la zona de carga. Cada uno pasa a la lista con su resumen y las pestañas *JSON*, *XML*, *Texto* y *PDF*. El buscador encuentra documentos por nombre, título, autor o cualquier palabra del texto.
 - **Por páginas**: en las pestañas *JSON* y *XML* el selector cambia entre *Documento completo* y cada página (la página elegida es la misma en las dos pestañas). *Descargar* baja lo que estás viendo y *Todas las páginas (.zip)* baja un archivo por página en un ZIP. En *Resumen* hay un ZIP con los JSON y los XML de todas las páginas.
 - **Regenerar el XML**: en la pestaña *XML* cambia la etiqueta raíz, la sangría y las rutas `forceAttribute` / `forceContent`; se regeneran el XML completo y el de cada página. El botón *Usar preset compacto pdf2json* convierte coordenadas, medidas y colores en atributos (cada línea, relleno o texto ocupa una sola etiqueta y el XML pesa cerca de un 30 % menos).

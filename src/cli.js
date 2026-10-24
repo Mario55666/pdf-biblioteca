@@ -2,6 +2,7 @@
 //   node src/cli.js agregar factura.pdf carpeta-con-pdfs/
 //   node src/cli.js listar [búsqueda]
 //   node src/cli.js xml <id> --compacto --sangria 2
+//   node src/cli.js paginas <id>
 //   node src/cli.js json2xml datos.json datos.xml --raiz datos --atributo /datos/id
 //   node src/cli.js eliminar <id>
 
@@ -17,7 +18,8 @@ const AYUDA = `Biblioteca PDF → JSON → XML
 Comandos:
   agregar <pdf|carpeta>...   Extrae el JSON de cada PDF y lo guarda en la biblioteca
   listar [búsqueda]          Muestra los documentos (busca en nombre, título y texto)
-  xml <id>                   Vuelve a generar el XML de un documento con otras opciones
+  xml <id>                   Vuelve a generar el XML de un documento (completo y por página) con otras opciones
+  paginas <id>...            Vuelve a separar el JSON y el XML por página (todos los documentos si no indicas id)
   json2xml <entrada.json> [salida.xml]
                              Convierte cualquier JSON a XML (sin usar la biblioteca)
   eliminar <id>              Borra un documento de la biblioteca
@@ -108,6 +110,16 @@ async function main() {
 			if (!ficha) throw new Error(`No existe el documento "${id}"`);
 			const { ficha: nueva } = await biblioteca.regenerarXml(id, opcionesXml(ficha.opcionesXml.raiz));
 			console.log(`XML regenerado (${kb(nueva.bytes.xml)}): ${biblioteca.ruta(id, "xml")}`);
+			console.log(`y sus ${nueva.paginas} páginas en ${path.join(path.dirname(biblioteca.ruta(id, "xml")), "paginas")}`);
+			break;
+		}
+		case "paginas": {
+			const ids = argumentos.length ? argumentos : (await biblioteca.listar()).map((ficha) => ficha.id);
+			for (const id of ids) {
+				const ficha = await biblioteca.obtener(id);
+				if (!ficha) throw new Error(`No existe el documento "${id}"`);
+				console.log(`${id}: ${ficha.paginas} JSON y ${ficha.paginas} XML en ${await biblioteca.separarPaginas(id)}`);
+			}
 			break;
 		}
 		case "json2xml": {

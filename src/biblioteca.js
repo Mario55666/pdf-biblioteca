@@ -8,10 +8,11 @@
 //     documento.xml   ese JSON convertido a XML
 //     texto.txt       el texto plano del PDF
 //     campos.json     los campos de formulario (si el PDF es un formulario)
+//     paginas/        un JSON y un XML por página: pagina-001.json, pagina-001.xml...
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extraerJson } from "./pdfAJson.js";
@@ -31,7 +32,10 @@ export const ARCHIVOS = Object.freeze({
 	campos: { nombre: "campos.json", tipo: "application/json; charset=utf-8", extension: "campos.json" },
 });
 
+export const TIPOS_PAGINA = Object.freeze({ json: ARCHIVOS.json.tipo, xml: ARCHIVOS.xml.tipo });
+
 const ID_VALIDO = /^[a-z0-9][a-z0-9-]{0,80}$/;
+const CARPETA_PAGINAS = "paginas";
 
 export class Biblioteca {
 	constructor(carpeta = CARPETA_POR_DEFECTO) {
@@ -95,6 +99,7 @@ export class Biblioteca {
 			writeFile(path.join(temporal, ARCHIVOS.texto.nombre), texto),
 			writeFile(path.join(temporal, ARCHIVOS.campos.nombre), JSON.stringify(campos, null, 2)),
 			writeFile(path.join(temporal, "ficha.json"), JSON.stringify(ficha, null, 2)),
+			escribirPaginas(temporal, json, opciones),
 		]);
 		await rename(temporal, path.join(this.carpeta, id));
 		return { ficha, duplicado: false };
@@ -149,7 +154,53 @@ export class Biblioteca {
 	}
 
 	/**
-	 * Vuelve a convertir el JSON guardado a XML con otras opciones.
+	 * Ruta en disco del JSON o el XML de una página. Si el documento se agregó antes de que
+	 * existiera la separación por páginas, la genera en ese momento.
+	 * @param {number|string} numero página, desde 1
+	 * @param {"json"|"xml"} tipo
+	 */
+	async rutaPagina(id, numero, tipo) {
+		const ficha = await this.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		if (!TIPOS_PAGINA[tipo]) throw new ErrorBiblioteca("Las páginas solo están en JSON o XML", 400);
+		const pagina = Number(numero);
+		if (!Number.isInteger(pagina) || pagina < 1 || pagina > ficha.paginas) {
+			throw new ErrorBiblioteca(`La página ${numero} no existe; el documento tiene ${ficha.paginas}`, 404);
+		}
+		const ruta = path.join(this.carpeta, id, CARPETA_PAGINAS, nombrePagina(pagina, tipo));
+		if (!existsSync(ruta)) await this.separarPaginas(id);
+		return ruta;
+	}
+
+	/** Vuelve a escribir el JSON y el XML de cada página a partir del JSON completo. */
+	async separarPaginas(id) {
+		const ficha = await this.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const json = JSON.parse(await readFile(this.ruta(id, "json"), "utf8"));
+		await escribirPaginas(path.join(this.carpeta, id), json, ficha.opcionesXml);
+		return path.join(this.carpeta, id, CARPETA_PAGINAS);
+	}
+
+	/**
+	 * Lee los archivos de todas las páginas, por ejemplo para empaquetarlos en un ZIP.
+	 * @param {Array<"json"|"xml">} tipos
+	 * @returns {Promise<Array<{nombre: string, contenido: Buffer}>>}
+	 */
+	async archivosPaginas(id, tipos = ["json", "xml"]) {
+		const ficha = await this.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const carpeta = path.join(this.carpeta, id, CARPETA_PAGINAS);
+		const nombres = [];
+		for (let pagina = 1; pagina <= ficha.paginas; pagina++) {
+			for (const tipo of tipos) nombres.push(nombrePagina(pagina, tipo));
+		}
+		if (nombres.some((nombre) => !existsSync(path.join(carpeta, nombre)))) await this.separarPaginas(id);
+		return Promise.all(nombres.map(async (nombre) => ({ nombre, contenido: await readFile(path.join(carpeta, nombre)) })));
+	}
+
+	/**
+	 * Vuelve a convertir el JSON guardado a XML con otras opciones,
+	 * tanto el documento completo como cada página.
 	 * @returns {Promise<{ficha: object, xml: string}>}
 	 */
 	async regenerarXml(id, opcionesXml) {
@@ -159,6 +210,7 @@ export class Biblioteca {
 		const json = JSON.parse(await readFile(this.ruta(id, "json"), "utf8"));
 		const xml = jsonAXml(json, opciones);
 		await writeFile(this.ruta(id, "xml"), xml);
+		await escribirPaginas(path.join(this.carpeta, id), json, opciones);
 		const actualizada = { ...ficha, opcionesXml: opciones, bytes: { ...ficha.bytes, xml: Buffer.byteLength(xml) } };
 		await writeFile(path.join(this.carpeta, id, "ficha.json"), JSON.stringify(actualizada, null, 2));
 		return { ficha: actualizada, xml };
@@ -170,17 +222,43 @@ export class Biblioteca {
 		await rm(path.join(this.carpeta, id), { recursive: true, force: true });
 		return true;
 	}
-
-	/** Tamaño en bytes de uno de los archivos del documento. */
-	async tamano(id, tipo) {
-		return (await stat(this.ruta(id, tipo))).size;
-	}
 }
 
 export class ErrorBiblioteca extends Error {
 	constructor(mensaje, estado = 500) {
 		super(mensaje);
 		this.estado = estado;
+	}
+}
+
+/**
+ * Divide la salida de pdf2json en un documento por página. Cada uno conserva la forma del
+ * original (Transcoder, Meta, Pages con una sola página), así las rutas de forceAttribute y
+ * forceContent, como /PDF/Pages/Texts/x, sirven igual para el documento completo y sus páginas.
+ */
+export function dividirEnPaginas(json) {
+	const paginas = json.Pages ?? [];
+	return paginas.map((pagina, indice) => ({
+		Transcoder: json.Transcoder,
+		Meta: json.Meta,
+		Pagina: indice + 1,
+		TotalPaginas: paginas.length,
+		Pages: [pagina],
+	}));
+}
+
+function nombrePagina(numero, extension) {
+	return `pagina-${String(numero).padStart(3, "0")}.${extension}`;
+}
+
+async function escribirPaginas(carpetaDocumento, json, opcionesXml) {
+	const carpeta = path.join(carpetaDocumento, CARPETA_PAGINAS);
+	await mkdir(carpeta, { recursive: true });
+	for (const pagina of dividirEnPaginas(json)) {
+		await Promise.all([
+			writeFile(path.join(carpeta, nombrePagina(pagina.Pagina, "json")), JSON.stringify(pagina, null, 2)),
+			writeFile(path.join(carpeta, nombrePagina(pagina.Pagina, "xml")), jsonAXml(pagina, opcionesXml)),
+		]);
 	}
 }
 

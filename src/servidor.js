@@ -7,14 +7,20 @@
 //   DELETE /api/documentos/:id              elimina el documento
 //   GET    /api/documentos/:id/:archivo     archivo pdf | json | xml | texto | campos
 //                                          ?descargar=1 para descargarlo, ?limite=N para los primeros N bytes
-//   PUT    /api/documentos/:id/xml          cuerpo = opciones del XML; vuelve a generar el XML
+//   PUT    /api/documentos/:id/xml          cuerpo = opciones del XML; vuelve a generar el XML (completo y por página)
+//   GET    /api/documentos/:id/paginas/:n/:tipo
+//                                          JSON o XML de la página n (admite ?descargar=1 y ?limite=N)
+//   GET    /api/documentos/:id/paginas/zip?tipo=json|xml|todo
+//                                          todas las páginas en un ZIP
 
 import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ARCHIVOS, Biblioteca, ErrorBiblioteca, OPCIONES_XML_POR_DEFECTO } from "./biblioteca.js";
+import { ARCHIVOS, Biblioteca, ErrorBiblioteca, OPCIONES_XML_POR_DEFECTO, TIPOS_PAGINA } from "./biblioteca.js";
 import { presetCompactoPdf2json } from "./presets.js";
+import { crearZip } from "./zip.js";
 
 const RAIZ_PROYECTO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLICO = path.join(RAIZ_PROYECTO, "public");
@@ -84,6 +90,29 @@ async function atenderApi(peticion, respuesta, url) {
 		}
 	}
 
+	if (archivo === "paginas" && metodo === "GET") {
+		const ficha = await biblioteca.obtener(id);
+		if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
+		const base = ficha.nombre.replace(/\.pdf$/i, "");
+
+		if (partes.length === 4 && partes[3] === "zip") {
+			const tipo = url.searchParams.get("tipo") ?? "todo";
+			if (tipo !== "todo" && !TIPOS_PAGINA[tipo]) throw new ErrorBiblioteca('El tipo debe ser "json", "xml" o "todo"', 400);
+			const zip = crearZip(await biblioteca.archivosPaginas(id, tipo === "todo" ? ["json", "xml"] : [tipo]));
+			respuesta.writeHead(200, {
+				"Content-Type": "application/zip",
+				"Content-Length": zip.length,
+				"Content-Disposition": disposicion(`${base}-paginas${tipo === "todo" ? "" : `-${tipo}`}.zip`),
+			});
+			return respuesta.end(zip);
+		}
+		if (partes.length === 5) {
+			const [numero, tipo] = partes.slice(3);
+			const ruta = await biblioteca.rutaPagina(id, numero, tipo);
+			return servirArchivo(respuesta, url, ruta, TIPOS_PAGINA[tipo], `${base}-${path.basename(ruta)}`);
+		}
+	}
+
 	if (partes.length === 3 && ARCHIVOS[archivo]) {
 		if (metodo === "GET") return servirArchivoDocumento(respuesta, url, id, archivo);
 		if (metodo === "PUT" && archivo === "xml") {
@@ -104,19 +133,24 @@ async function atenderApi(peticion, respuesta, url) {
 async function servirArchivoDocumento(respuesta, url, id, archivo) {
 	const ficha = await biblioteca.obtener(id);
 	if (!ficha) throw new ErrorBiblioteca("Documento no encontrado", 404);
-	const ruta = biblioteca.ruta(id, archivo);
-	const total = await biblioteca.tamano(id, archivo);
+	const base = ficha.nombre.replace(/\.pdf$/i, "");
+	return servirArchivo(respuesta, url, biblioteca.ruta(id, archivo), ARCHIVOS[archivo].tipo, `${base}.${ARCHIVOS[archivo].extension}`);
+}
+
+// Envía un archivo; con ?limite=N solo sus primeros N bytes y con ?descargar como descarga.
+async function servirArchivo(respuesta, url, ruta, tipoContenido, nombreDescarga) {
+	const total = (await stat(ruta)).size;
 	const limite = Number(url.searchParams.get("limite")) || 0;
 	const parcial = limite > 0 && limite < total;
 
-	const cabeceras = { "Content-Type": ARCHIVOS[archivo].tipo, "X-Tamano-Total": String(total), "Cache-Control": "no-store" };
-	if (url.searchParams.has("descargar")) {
-		const base = ficha.nombre.replace(/\.pdf$/i, "");
-		const nombre = `${base}.${ARCHIVOS[archivo].extension}`;
-		cabeceras["Content-Disposition"] = `attachment; filename="${nombre.replace(/[^\x20-\x7e]|"/g, "_")}"; filename*=UTF-8''${encodeURIComponent(nombre)}`;
-	}
+	const cabeceras = { "Content-Type": tipoContenido, "X-Tamano-Total": String(total), "Cache-Control": "no-store" };
+	if (url.searchParams.has("descargar")) cabeceras["Content-Disposition"] = disposicion(nombreDescarga);
 	respuesta.writeHead(200, cabeceras);
 	createReadStream(ruta, parcial ? { start: 0, end: limite - 1 } : {}).pipe(respuesta);
+}
+
+function disposicion(nombre) {
+	return `attachment; filename="${nombre.replace(/[^\x20-\x7e]|"/g, "_")}"; filename*=UTF-8''${encodeURIComponent(nombre)}`;
 }
 
 async function servirEstatico(respuesta, ruta) {

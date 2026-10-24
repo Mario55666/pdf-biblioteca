@@ -5,7 +5,8 @@ import { presetCompactoPdf2json } from "/lib/presets.js";
 const LIMITE_VISTA = 512 * 1024;
 
 const $ = (selector) => document.querySelector(selector);
-const estado = { documentos: [], ficha: null, pestana: "resumen", cargadas: new Set() };
+// pagina: "todo" para el documento completo, o el número de página que se ve en JSON y XML.
+const estado = { documentos: [], ficha: null, pestana: "resumen", pagina: "todo", cargadas: new Set() };
 
 // ---------- Utilidades ----------
 
@@ -213,6 +214,7 @@ async function seleccionar(id) {
 		return;
 	}
 	estado.ficha = ficha;
+	estado.pagina = "todo";
 	estado.cargadas.clear();
 	history.replaceState(null, "", `#doc=${encodeURIComponent(id)}`);
 	for (const boton of document.querySelectorAll("#lista button")) boton.setAttribute("aria-current", String(boton.dataset.id === id));
@@ -224,10 +226,51 @@ async function seleccionar(id) {
 	for (const tipo of ["json", "xml", "texto", "pdf"]) {
 		$(`#descargar-${tipo}`).href = `/api/documentos/${encodeURIComponent(id)}/${tipo}?descargar=1`;
 	}
+	for (const enlace of document.querySelectorAll("[data-zip]")) {
+		enlace.href = `/api/documentos/${encodeURIComponent(id)}/paginas/zip?tipo=${enlace.dataset.zip}`;
+	}
 	pintarFicha(ficha);
+	llenarSelectoresPagina(ficha);
 	rellenarOpcionesXml($("#opciones-xml"), ficha.opcionesXml);
 	$("#visor-pdf").removeAttribute("src");
 	mostrarPestana(estado.pestana);
+}
+
+// ---------- Páginas ----------
+
+/** URL del JSON o XML que se está viendo: el documento completo o la página elegida. */
+function urlArchivo(tipo, parametros = {}) {
+	const id = encodeURIComponent(estado.ficha.id);
+	const porPagina = estado.pagina !== "todo" && (tipo === "json" || tipo === "xml");
+	const ruta = porPagina ? `/api/documentos/${id}/paginas/${estado.pagina}/${tipo}` : `/api/documentos/${id}/${tipo}`;
+	const consulta = new URLSearchParams(parametros).toString();
+	return consulta ? `${ruta}?${consulta}` : ruta;
+}
+
+function llenarSelectoresPagina(ficha) {
+	for (const selector of document.querySelectorAll(".selector-pagina")) {
+		const opciones = [new Option("Documento completo", "todo")];
+		for (let pagina = 1; pagina <= ficha.paginas; pagina++) opciones.push(new Option(`Página ${pagina} de ${ficha.paginas}`, String(pagina)));
+		selector.replaceChildren(...opciones);
+		selector.value = estado.pagina;
+	}
+	actualizarDescargasPagina();
+}
+
+function actualizarDescargasPagina() {
+	for (const enlace of document.querySelectorAll("[data-descargar]")) enlace.href = urlArchivo(enlace.dataset.descargar, { descargar: 1 });
+}
+
+// JSON y XML comparten la página elegida, así se puede comparar la misma página en los dos formatos.
+for (const selector of document.querySelectorAll(".selector-pagina")) {
+	selector.addEventListener("change", () => {
+		estado.pagina = selector.value;
+		for (const otro of document.querySelectorAll(".selector-pagina")) otro.value = estado.pagina;
+		estado.cargadas.delete("json");
+		estado.cargadas.delete("xml");
+		actualizarDescargasPagina();
+		mostrarPestana(estado.pestana);
+	});
 }
 
 function pintarFicha(ficha) {
@@ -243,6 +286,7 @@ function pintarFicha(ficha) {
 		["Formulario", ficha.esFormulario ? `Sí, ${ficha.campos} ${ficha.campos === 1 ? "campo" : "campos"}` : "No"],
 		["Texto extraído", `${ficha.caracteres.toLocaleString("es-PE")} caracteres`],
 		["Tamaños", `PDF ${tamano(ficha.bytes.pdf)} · JSON ${tamano(ficha.bytes.json)} · XML ${tamano(ficha.bytes.xml)}`],
+		["Por página", ficha.paginas ? `${ficha.paginas} JSON y ${ficha.paginas} XML en biblioteca/${ficha.id}/paginas/` : ""],
 		["XML", describirOpciones(ficha.opcionesXml)],
 		["Extraído con", ficha.transcoder],
 		["Agregado", fecha(ficha.agregado, true)],
@@ -262,6 +306,13 @@ function pintarFicha(ficha) {
 					dd.append(codigo);
 				} else {
 					dd.textContent = valor;
+				}
+				if (etiqueta === "Por página") {
+					const enlace = document.createElement("a");
+					enlace.href = `/api/documentos/${encodeURIComponent(ficha.id)}/paginas/zip?tipo=todo`;
+					enlace.download = "";
+					enlace.textContent = "Descargar todas (.zip)";
+					dd.append(" · ", enlace);
 				}
 				return [dt, dd];
 			}),
@@ -293,16 +344,18 @@ function mostrarPestana(nombre) {
 
 async function pintarArchivo(tipo) {
 	const id = estado.ficha.id;
+	const pagina = estado.pagina;
 	const destino = $(`#codigo-${tipo}`);
 	const nota = $(`#nota-${tipo}`);
 	destino.textContent = "Cargando…";
 	nota.textContent = "";
 	try {
-		const respuesta = await fetch(`/api/documentos/${encodeURIComponent(id)}/${tipo}?limite=${LIMITE_VISTA}`);
+		const respuesta = await fetch(urlArchivo(tipo, { limite: LIMITE_VISTA }));
 		if (!respuesta.ok) throw new Error((await respuesta.json()).error);
 		const total = Number(respuesta.headers.get("X-Tamano-Total"));
 		const texto = await respuesta.text();
-		if (estado.ficha?.id !== id) return;
+		// Si mientras tanto se eligió otro documento u otra página, esta respuesta ya no sirve.
+		if (estado.ficha?.id !== id || (tipo !== "texto" && estado.pagina !== pagina)) return;
 		if (tipo === "json") destino.innerHTML = resaltarJson(texto);
 		else if (tipo === "xml") destino.innerHTML = resaltarXml(texto);
 		else destino.textContent = texto || "(El PDF no tiene texto extraíble; puede ser una imagen escaneada.)";
@@ -315,7 +368,7 @@ async function pintarArchivo(tipo) {
 
 $("#eliminar").addEventListener("click", async () => {
 	const ficha = estado.ficha;
-	if (!ficha || !confirm(`¿Eliminar «${ficha.nombre}» de la biblioteca?\nSe borran el PDF, el JSON, el XML y el texto guardados.`)) return;
+	if (!ficha || !confirm(`¿Eliminar «${ficha.nombre}» de la biblioteca?\nSe borran el PDF, el texto y el JSON y el XML guardados (completos y por página).`)) return;
 	try {
 		await api(`/api/documentos/${encodeURIComponent(ficha.id)}`, { method: "DELETE" });
 		avisar("Documento eliminado");
@@ -336,7 +389,7 @@ for (const boton of document.querySelectorAll("[data-copiar]")) {
 			if (tipo === "conversor") {
 				texto = estado.xmlConvertido ?? "";
 			} else {
-				const respuesta = await fetch(`/api/documentos/${encodeURIComponent(estado.ficha.id)}/${tipo}`);
+				const respuesta = await fetch(urlArchivo(tipo));
 				texto = await respuesta.text();
 			}
 			await navigator.clipboard.writeText(texto);

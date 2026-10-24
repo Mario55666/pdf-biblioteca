@@ -75,8 +75,11 @@
 
 				<div class="panel" data-panel="json" hidden>
 					<div class="herramientas">
+						<select class="selector-pagina" aria-label="Página del JSON"></select>
 						<span class="nota" id="nota-json"></span>
 						<button class="boton secundario" type="button" data-copiar="json">Copiar</button>
+						<a class="boton secundario" data-descargar="json" download>Descargar</a>
+						<a class="boton secundario" data-zip="json" download title="Un JSON por página en un archivo ZIP">Todas las páginas (.zip)</a>
 					</div>
 					<pre class="codigo" id="codigo-json"></pre>
 				</div>
@@ -106,12 +109,15 @@
 						<div class="fila botones">
 							<button class="boton secundario" type="button" id="preset-compacto">Usar preset compacto pdf2json</button>
 							<button class="boton secundario" type="button" id="preset-limpiar">Quitar rutas</button>
-							<button class="boton" type="submit">Regenerar XML</button>
+							<button class="boton" type="submit" title="Regenera el XML completo y el de cada página">Regenerar XML</button>
 						</div>
 					</form>
 					<div class="herramientas">
+						<select class="selector-pagina" aria-label="Página del XML"></select>
 						<span class="nota" id="nota-xml"></span>
 						<button class="boton secundario" type="button" data-copiar="xml">Copiar</button>
+						<a class="boton secundario" data-descargar="xml" download>Descargar</a>
+						<a class="boton secundario" data-zip="xml" download title="Un XML por página en un archivo ZIP">Todas las páginas (.zip)</a>
 					</div>
 					<pre class="codigo" id="codigo-xml"></pre>
 				</div>

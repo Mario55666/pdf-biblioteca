@@ -18,6 +18,15 @@ Se usa desde el navegador (arrastrar y soltar PDFs, buscar, ver y descargar) o d
 
 ## Instalación
 
+Descarga el proyecto desde GitHub:
+
+```bash
+git clone https://github.com/Mario55666/pdf-biblioteca.git
+cd pdf-biblioteca
+```
+
+Instala las dependencias y prepara pdf2json (una sola vez):
+
 ```bash
 npm install
 ```
@@ -25,6 +34,16 @@ npm install
 ```bash
 npm run preparar
 ```
+
+Arranca la biblioteca y abre <http://localhost:8780>:
+
+```bash
+npm start
+```
+
+Para actualizarla más adelante: `git pull`, `npm install` y, si cambió el fork de pdf2json, `npm run preparar`.
+
+Los PDF que cargues y sus conversiones se guardan en `biblioteca/`, que no se sube a GitHub (está en `.gitignore`), igual que `vendor/` y `node_modules/`.
 
 `npm install` instala el OCR: [tesseract.js](https://github.com/naptha/tesseract.js) (Tesseract compilado a WebAssembly), los idiomas español e inglés, y [pdf.js](https://github.com/mozilla/pdf.js) con [@napi-rs/canvas](https://github.com/Brooooooklyn/canvas) para convertir las páginas en imagen. Después el OCR funciona sin conexión.
 

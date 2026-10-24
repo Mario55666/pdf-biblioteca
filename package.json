@@ -1,0 +1,17 @@
+{
+	"name": "pdf-biblioteca",
+	"version": "1.0.0",
+	"description": "Extrae el JSON de archivos PDF con pdf2json, lo guarda en una biblioteca local y lo convierte a XML con la lógica de XmlToJson",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"preparar": "node scripts/preparar-pdf2json.js",
+		"start": "node src/servidor.js",
+		"cli": "node src/cli.js",
+		"test": "node --test \"test/*.test.js\""
+	},
+	"engines": {
+		"node": ">=22.23.2"
+	},
+	"license": "Apache-2.0"
+}

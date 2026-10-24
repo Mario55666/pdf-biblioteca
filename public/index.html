@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Biblioteca PDF</title>
+	<link rel="icon" href="icono.svg" type="image/svg+xml">
+	<link rel="stylesheet" href="estilos.css">
+	<script type="module" src="app.js"></script>
+</head>
+<body>
+	<header class="barra">
+		<div class="marca">
+			<img src="icono.svg" alt="" width="28" height="28">
+			<div>
+				<h1>Biblioteca PDF</h1>
+				<p>PDF → JSON con <a href="https://github.com/Mario55666/pdf2json" target="_blank" rel="noopener">pdf2json</a> · JSON → XML con <a href="https://github.com/smart-fun/XmlToJson" target="_blank" rel="noopener">XmlToJson</a></p>
+			</div>
+		</div>
+		<nav class="vistas" role="tablist" aria-label="Secciones">
+			<button role="tab" aria-selected="true" data-vista="biblioteca">Biblioteca</button>
+			<button role="tab" aria-selected="false" data-vista="conversor">Conversor JSON → XML</button>
+		</nav>
+	</header>
+
+	<main id="vista-biblioteca" class="vista">
+		<aside class="lateral">
+			<label class="zona-carga" id="zona-carga">
+				<input type="file" id="selector-pdf" accept="application/pdf,.pdf" multiple hidden>
+				<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+				<strong>Arrastra tus PDF aquí</strong>
+				<span>o haz clic para elegirlos</span>
+			</label>
+			<ul class="cola" id="cola" aria-live="polite"></ul>
+
+			<div class="buscador">
+				<input type="search" id="busqueda" placeholder="Buscar por nombre, título o texto…" aria-label="Buscar en la biblioteca">
+			</div>
+			<p class="contador" id="contador"></p>
+			<ul class="lista" id="lista"></ul>
+		</aside>
+
+		<section class="detalle" id="detalle">
+			<div class="vacio" id="vacio">
+				<h2>Tu biblioteca está lista</h2>
+				<p>Sube un PDF: se extrae su JSON con pdf2json, se convierte a XML y ambos quedan guardados aquí junto al PDF original y su texto.</p>
+			</div>
+
+			<div class="documento" id="documento" hidden>
+				<div class="cabecera-doc">
+					<div>
+						<h2 id="doc-titulo"></h2>
+						<p class="sub" id="doc-sub"></p>
+					</div>
+					<div class="acciones">
+						<a class="boton" id="descargar-json" download>JSON</a>
+						<a class="boton" id="descargar-xml" download>XML</a>
+						<a class="boton secundario" id="descargar-texto" download>Texto</a>
+						<a class="boton secundario" id="descargar-pdf" download>PDF</a>
+						<button class="boton peligro" id="eliminar" type="button">Eliminar</button>
+					</div>
+				</div>
+
+				<nav class="pestanas" role="tablist" aria-label="Contenido del documento">
+					<button role="tab" data-pestana="resumen" aria-selected="true">Resumen</button>
+					<button role="tab" data-pestana="json" aria-selected="false">JSON</button>
+					<button role="tab" data-pestana="xml" aria-selected="false">XML</button>
+					<button role="tab" data-pestana="texto" aria-selected="false">Texto</button>
+					<button role="tab" data-pestana="pdf" aria-selected="false">PDF</button>
+				</nav>
+
+				<div class="panel" data-panel="resumen">
+					<dl class="ficha" id="ficha"></dl>
+				</div>
+
+				<div class="panel" data-panel="json" hidden>
+					<div class="herramientas">
+						<span class="nota" id="nota-json"></span>
+						<button class="boton secundario" type="button" data-copiar="json">Copiar</button>
+					</div>
+					<pre class="codigo" id="codigo-json"></pre>
+				</div>
+
+				<div class="panel" data-panel="xml" hidden>
+					<form class="opciones-xml" id="opciones-xml">
+						<div class="fila">
+							<label>Etiqueta raíz <input name="raiz" required></label>
+							<label>Sangría
+								<select name="sangria">
+									<option value="null">Una línea</option>
+									<option value="0">0</option>
+									<option value="2">2 espacios</option>
+									<option value="3">3 espacios</option>
+									<option value="4">4 espacios</option>
+								</select>
+							</label>
+						</div>
+						<div class="fila">
+							<label class="ancho">Atributos <small>forceAttribute · una ruta por línea, ej. <code>/PDF/Pages/Texts/x</code></small>
+								<textarea name="atributos" rows="4" spellcheck="false"></textarea>
+							</label>
+							<label class="ancho">Contenido <small>forceContent · una ruta por línea</small>
+								<textarea name="contenido" rows="4" spellcheck="false"></textarea>
+							</label>
+						</div>
+						<div class="fila botones">
+							<button class="boton secundario" type="button" id="preset-compacto">Usar preset compacto pdf2json</button>
+							<button class="boton secundario" type="button" id="preset-limpiar">Quitar rutas</button>
+							<button class="boton" type="submit">Regenerar XML</button>
+						</div>
+					</form>
+					<div class="herramientas">
+						<span class="nota" id="nota-xml"></span>
+						<button class="boton secundario" type="button" data-copiar="xml">Copiar</button>
+					</div>
+					<pre class="codigo" id="codigo-xml"></pre>
+				</div>
+
+				<div class="panel" data-panel="texto" hidden>
+					<div class="herramientas">
+						<span class="nota" id="nota-texto"></span>
+						<button class="boton secundario" type="button" data-copiar="texto">Copiar</button>
+					</div>
+					<pre class="codigo texto" id="codigo-texto"></pre>
+				</div>
+
+				<div class="panel" data-panel="pdf" hidden>
+					<iframe id="visor-pdf" title="PDF original"></iframe>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<main id="vista-conversor" class="vista conversor" hidden>
+		<section class="columna">
+			<div class="herramientas">
+				<h2>JSON</h2>
+				<label class="boton secundario">Abrir .json<input type="file" id="abrir-json" accept="application/json,.json" hidden></label>
+				<button class="boton secundario" type="button" id="ejemplo-json">Ejemplo</button>
+			</div>
+			<textarea id="entrada-json" spellcheck="false" placeholder='{"owner": {"id": 124, "name": "John Doe"}}'></textarea>
+			<form class="opciones-xml" id="opciones-conversor">
+				<div class="fila">
+					<label>Etiqueta raíz <small>si el JSON no tiene una sola</small><input name="raiz" value="documento" required></label>
+					<label>Sangría
+						<select name="sangria">
+							<option value="null">Una línea</option>
+							<option value="0">0</option>
+							<option value="2">2 espacios</option>
+							<option value="3" selected>3 espacios</option>
+							<option value="4">4 espacios</option>
+						</select>
+					</label>
+				</div>
+				<div class="fila">
+					<label class="ancho">Atributos <small>forceAttribute</small>
+						<textarea name="atributos" rows="3" spellcheck="false" placeholder="/owner/id"></textarea>
+					</label>
+					<label class="ancho">Contenido <small>forceContent</small>
+						<textarea name="contenido" rows="3" spellcheck="false" placeholder="/owner/name"></textarea>
+					</label>
+				</div>
+			</form>
+		</section>
+		<section class="columna">
+			<div class="herramientas">
+				<h2>XML</h2>
+				<span class="nota" id="estado-conversor"></span>
+				<button class="boton secundario" type="button" data-copiar="conversor">Copiar</button>
+				<button class="boton" type="button" id="descargar-conversor">Descargar</button>
+			</div>
+			<pre class="codigo" id="salida-xml"></pre>
+		</section>
+	</main>
+
+	<div class="aviso" id="aviso" role="status" hidden></div>
+</body>
+</html>

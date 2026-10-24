@@ -41,6 +41,8 @@ Arranca la biblioteca y abre <http://localhost:8780>:
 npm start
 ```
 
+En Windows también puedes hacer doble clic en `iniciar-biblioteca.cmd`: arranca el servidor (y la primera vez ejecuta `npm install` y `npm run preparar`). Mientras esa ventana siga abierta, la biblioteca está encendida.
+
 Para actualizarla más adelante: `git pull`, `npm install` y, si cambió el fork de pdf2json, `npm run preparar`.
 
 Los PDF que cargues y sus conversiones se guardan en `biblioteca/`, que no se sube a GitHub (está en `.gitignore`), igual que `vendor/` y `node_modules/`.

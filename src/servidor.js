@@ -16,6 +16,11 @@
 //                                          paquete ZIP para reconstruir el documento en InDesign (porky)
 //   POST   /api/documentos/:id/ocr          (re)aplica el OCR a las páginas sin texto, en segundo plano
 //   GET    /api/documentos/:id/ocr          resultado del OCR (ocr.json); el avance está en la ficha (ocr.estado)
+//
+// Páginas locales, como el Atlas de la diagramación abierto como archivo (file://, origen "null")
+// o servido en localhost, pueden subir un PDF (POST /api/documentos) y consultar ese documento
+// (GET /api/documentos/:id/...). La lista de la biblioteca y las rutas que borran o modifican no
+// aceptan otros orígenes.
 
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -72,8 +77,39 @@ async function pedirOcr(id) {
 	return ficha;
 }
 
+const ORIGEN_LOCAL = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
+/** Devuelve el origen al que se permite la petición entre orígenes, o null si no se permite. */
+function origenPermitido(peticion, url) {
+	const origen = peticion.headers.origin;
+	if (!origen || (origen !== "null" && !ORIGEN_LOCAL.test(origen))) return null;
+	const partes = url.pathname.split("/").filter(Boolean);
+	if (partes[0] !== "api" || partes[1] !== "documentos") return null;
+	const metodo = peticion.method === "OPTIONS" ? peticion.headers["access-control-request-method"] : peticion.method;
+	if (metodo === "POST" && partes.length === 2) return origen;
+	if (metodo === "GET" && partes.length >= 3) return origen;
+	return null;
+}
+
 async function atender(peticion, respuesta) {
 	const url = new URL(peticion.url, "http://localhost");
+	const origen = origenPermitido(peticion, url);
+	if (origen) {
+		respuesta.setHeader("Access-Control-Allow-Origin", origen);
+		respuesta.setHeader("Access-Control-Expose-Headers", "X-Tamano-Total, Content-Disposition");
+		respuesta.setHeader("Vary", "Origin");
+	}
+	if (peticion.method === "OPTIONS") {
+		if (!origen) return respuesta.writeHead(403).end();
+		respuesta.writeHead(204, {
+			"Access-Control-Allow-Methods": "GET, POST",
+			"Access-Control-Allow-Headers": "Content-Type, X-Nombre-Archivo",
+			"Access-Control-Max-Age": "600",
+			// Chrome pide este permiso para que una página llame a un servidor de la red local.
+			...(peticion.headers["access-control-request-private-network"] ? { "Access-Control-Allow-Private-Network": "true" } : {}),
+		});
+		return respuesta.end();
+	}
 	try {
 		if (url.pathname.startsWith("/api/")) {
 			await atenderApi(peticion, respuesta, url);
